@@ -1,3 +1,4 @@
+
 =pod
 
 =head1 NAME
@@ -21,9 +22,34 @@ Minion::Backend::Redis - Redis backend for Minion job queue
 
 =head1 DESCRIPTION
 
-L<Minion::Backend::Redis> is a backend for L<Minion> based on L<Mojo::Redis2>.
+L<Minion::Backend::Redis> is a backend for L<Minion> based on L<Mojo::Redis>.
 Note that L<Redis Server|https://redis.io/download> version C<2.8.0> or newer
 is required to use this backend.
+
+=head1 CAUTION
+
+This is a slightly hackish modification of the original code by L<Dan Book|https://github.com/Grinnz/Minion-Backend-Redis> to use L<Mojo::Redis> instead of L<Mojo::Redis2>.  
+As such, some Minion backend commands aren't fully implemented, such as "history", "list_locks" or filtering jobs by Active/Waiting/Done status.  
+The tests don't all pass either atm, which are things that may or may not be improved in future iterations. :^)
+
+=head1 PERFORMANCE
+
+You can run examples/minion_bench.pl to get some performance metrics.  
+
+Clean start with 10000 jobs
+Enqueued 10000 jobs in 75.4425361156464 seconds (132.551/s)
+4 workers finished 1000 jobs each in 144.383904933929 seconds (27.704/s)
+4 workers finished 1000 jobs each in 114.176534175873 seconds (35.033/s)
+Requesting job info 100 times
+Received job info 100 times in 0.883066892623901 seconds (113.242/s)
+Requesting stats 100 times
+Received stats 100 times in 0.408332109451294 seconds (244.899/s)
+Repairing 100 times
+Repaired 100 times in 0.543424129486084 seconds (184.018/s)
+Acquiring locks 1000 times
+Acquired locks 1000 times in 3.08033990859985 seconds (324.639/s)
+Releasing locks 1000 times
+Releasing locks 1000 times in 1.74723196029663 seconds (572.334/s)
 
 =head1 ATTRIBUTES
 
@@ -183,6 +209,24 @@ delay based on L<Minion/"backoff">.
   my $bool = $backend->finish_job($job_id, $retries, {msg => 'All went well!'});
 
 Transition from C<active> to C<finished> state.
+
+=head2 history
+
+  my $history = $backend->history;
+
+Get history information for job queue.
+
+These fields are currently available:
+
+=over 2
+
+=item daily
+
+  daily => [{epoch => 12345, finished_jobs => 95, failed_jobs => 2}, ...]
+
+Hourly counts for processed jobs from the past day.
+
+=back
 
 =head2 list_jobs
 
