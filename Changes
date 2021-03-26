@@ -1,2 +1,6 @@
 {{$NEXT}}
-  - First release
+  - Switch from Mojo::Redis2 to Mojo::Redis
+  - Add shims for history and list_locks to get a sorta-working Minion admin console
+
+0.001
+  - Initial code by DBOOK
