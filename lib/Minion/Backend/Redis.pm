@@ -137,7 +137,7 @@ sub history {
 
     my $db = $self->redis->db;
 
-    # Not implemented.
+    # TODO: Not implemented.
     my @daily_ordered = [];
     return { daily => \@daily_ordered };
 }
@@ -159,6 +159,11 @@ sub list_jobs {
         $redis->expire( $key, 60 );
         push @sets, $key;
     }
+
+    if ( defined( my $notes = $options->{notes} ) ) {
+        croak 'Listing jobs by existence of notes is unimplemented';
+    }
+
     my $jobs_hash = sha256_base64( join '$', $$, time );
     my $jobs_key  = "minion.temp.list_jobs.$jobs_hash";
     $redis->sinterstore( $jobs_key, @sets );
@@ -175,6 +180,12 @@ sub list_jobs {
         my $children = $redis->smembers("minion.job.$id.children");
         my %notes    = %{ $redis->hgetall("minion.job.$id.notes") };
         $_ = from_json($_) for values %notes;
+
+        if ( defined( my $states = $options->{states} ) ) {
+            unless ( grep { $_ eq $job_info{state} } @$states ) {
+                next;
+            }
+        }
 
         push @jobs,
           {
@@ -204,8 +215,15 @@ sub list_jobs {
 sub list_locks {
     my ( $self, $offset, $limit, $options ) = @_;
 
-    # Not implemented
-    return { locks => [], total => 0 };
+    my $keys  = $self->redis->db->keys('minion.lock.*');
+    my $total = scalar @$keys;
+    my @locks;
+    foreach my $lock (@$keys) {
+        my %lock_info = %{ $self->redis->db->hgetall($lock) };
+        push @locks, %lock_info;
+    }
+
+    return { locks => \@locks, total => $total };
 }
 
 sub list_workers {

@@ -5,17 +5,22 @@ BEGIN { $ENV{MOJO_REACTOR} = 'Mojo::Reactor::Poll' }
 use Test::More;
 use Mojo::Redis;
 
-plan skip_all => 'Cannot test on Win32' if $^O eq 'MSWin32';
-plan skip_all => $@ unless eval { Mojo::Redis->new };
-
+use Config;
 use Minion;
 use Mojo::IOLoop;
+use Mojo::Promise;
 use POSIX ();
 use Sys::Hostname 'hostname';
 use Time::HiRes qw(time usleep);
 
+use constant HAS_PSEUDOFORK => $Config{d_pseudofork};
+
+plan skip_all => 'Cannot test on Win32' if $^O eq 'MSWin32';
+plan skip_all => $@ unless eval { Mojo::Redis->new };
+
 # Isolate tests
 my $minion = Minion->new( Redis => Mojo::Redis->new->url );
+$minion->reset;
 
 # Nothing to repair
 my $worker = $minion->repair->worker;
@@ -539,11 +544,7 @@ $worker->unregister;
 
 # Perform job in a running event loop
 $id = $minion->enqueue( add => [ 8, 9 ] );
-
-# TODO - This used to run in Mojo::IOLoop->delay(sub { $minion->perform_jobs })->wait;
-# But delay has been removed from Mojolicious -- should this use a Mojo::Promise instead?
-$minion->perform_jobs;
-
+Mojo::Promise->new->resolve->then( sub { $minion->perform_jobs } )->wait;
 is $minion->job($id)->info->{state}, 'finished', 'right state';
 is_deeply $minion->job($id)->info->{result}, { added => 17 }, 'right result';
 
@@ -681,7 +682,7 @@ ok !$job->is_finished, 'job is not finished';
 $job->stop;
 usleep 5000 until $job->is_finished;
 is $job->info->{state}, 'failed', 'right state';
-like $job->info->{result}, qr/Non-zero exit status/, 'right result';
+like $job->info->{result}, qr/exit code: 0, signal: 9/, 'right result';
 $worker->unregister;
 
 # Job dependencies
@@ -723,6 +724,7 @@ ok $job->finish, 'job finished';
 $worker->unregister;
 
 # Foreground
+# Currently breaks with I/O watcher not active at Mojo/IOLoop/Stream.pm line 97.
 $id  = $minion->enqueue( test => [] => { attempts => 2 } );
 $id2 = $minion->enqueue('test');
 $id3 = $minion->enqueue( test => [] => { parents => [ $id, $id2 ] } );

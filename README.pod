@@ -30,7 +30,7 @@ is required to use this backend.
 
 This is a slightly hackish modification of the original code by L<Dan Book|https://github.com/Grinnz/Minion-Backend-Redis> to use L<Mojo::Redis> instead of L<Mojo::Redis2>.
 
-As such, some Minion backend commands aren't fully implemented, such as "history", "list_locks" or filtering jobs by Active/Waiting/Done status.
+As such, some Minion backend commands aren't fully implemented, such as "history" and "list_locks".
 
 The tests don't all pass either atm, which are things that may or may not be improved in future iterations. :^)
 
@@ -61,9 +61,9 @@ implements the following new ones.
 =head2 redis
 
   my $redis = $backend->redis;
-  $backend  = $backend->redis(Mojo::Redis2->new);
+  $backend  = $backend->redis(Mojo::Redis->new);
 
-L<Mojo::Redis2> object used to store all data.
+L<Mojo::Redis> object used to store all data.
 
 =head1 METHODS
 
@@ -657,6 +657,6 @@ This is free software, licensed under:
 
 =head1 SEE ALSO
 
-L<Minion>, L<Mojo::Redis2>
+L<Minion>, L<Mojo::Redis>
 
 =cut
