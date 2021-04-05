@@ -12,8 +12,7 @@ use Mojo::Promise;
 use POSIX ();
 use Sys::Hostname 'hostname';
 use Time::HiRes qw(time usleep);
-
-use constant HAS_PSEUDOFORK => $Config{d_pseudofork};
+use Data::Dumper;
 
 plan skip_all => 'Cannot test on Win32' if $^O eq 'MSWin32';
 plan skip_all => $@ unless eval { Mojo::Redis->new };
@@ -613,13 +612,13 @@ is $job->info->{result}, 'Worker went away', 'right result';
 ok $job->info->{retried} < $job->info->{delayed}, 'delayed timestamp';
 $minion->backend->redis->db->hset( "minion.job.$id", delayed => time );
 
-#$job = $worker->register->dequeue(0);
-#is $job->id, $id, 'right id';
-#is $job->retries, 1, 'job has been retried once';
-#$worker->unregister;
-#$minion->repair;
-#is $job->info->{state},  'failed',           'right state';
-#is $job->info->{result}, 'Worker went away', 'right result';
+$job = $worker->register->dequeue(0);
+is $job->id, $id, 'right id';
+is $job->retries, 1, 'job has been retried once';
+$worker->unregister;
+$minion->repair;
+is $job->info->{state},  'failed',           'right state';
+is $job->info->{result}, 'Worker went away', 'right result';
 
 # A job needs to be dequeued again after a retry
 $minion->add_task( restart => sub { } );

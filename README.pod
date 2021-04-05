@@ -30,7 +30,7 @@ is required to use this backend.
 
 This is a slightly hackish modification of the original code by L<Dan Book|https://github.com/Grinnz/Minion-Backend-Redis> to use L<Mojo::Redis> instead of L<Mojo::Redis2>.
 
-As such, some Minion backend commands aren't fully implemented, such as "history" and "list_locks".
+As such, some Minion backend commands aren't fully implemented, such as "history".
 
 The tests don't all pass either atm, which are things that may or may not be improved in future iterations. :^)
 

@@ -12,6 +12,8 @@ use Sort::Versions 'versioncmp';
 use Sys::Hostname 'hostname';
 use Time::HiRes 'time';
 
+use Data::Dumper;
+
 our $VERSION = '0.002';
 
 has 'redis';
@@ -280,12 +282,26 @@ sub lock {
 }
 
 sub note {
-    my ( $self, $id, $key, $value ) = @_;
+    my ( $self, $id, $merge ) = @_;
     my $redis = $self->redis->db;
     return !!0 unless $redis->exists("minion.job.$id");
     $redis->watch("minion.job.$id");
     $redis->multi;
-    $redis->hset( "minion.job.$id.notes", $key => to_json($value) );
+
+    foreach my $key ( keys %$merge ) {
+
+        croak qq{Invalid note key '$key'; must not contain '.', '[', or ']'}
+          if $key =~ m/[\[\].]/;
+
+        if ( defined $merge->{$key} ) {
+            $redis->hset( "minion.job.$id.notes", $key,
+                to_json( $merge->{$key} ) );
+        }
+        else {
+            $redis->hdel( "minion.job.$id.notes", $key );
+        }
+    }
+
     $redis->exec;
     return !!1;
 }
@@ -365,9 +381,16 @@ sub repair {
     $redis->del('minion.jobs_missing_worker');
     my $orphaned_jobs = $redis->exec;
 
-    foreach my $id (@$orphaned_jobs) {
-        my $retries = $redis->hget( "minion.job.$id", 'retries' );
-        $self->fail_job( $id, $retries, 'Worker went away' );
+    # Duct tape to ensure we get a flat list of job IDs
+    my @flattened_jobs = _flatten(@$orphaned_jobs);
+
+    foreach my $id (@flattened_jobs) {
+        my ( $queue, $retries ) =
+          @{ $redis->hmget( "minion.job.$id", qw(queue retries) ) };
+
+        if ( !$queue || $queue ne "minion_foreground" ) {
+            $self->fail_job( $id, $retries, 'Worker went away' );
+        }
     }
 
     # Old jobs with no unresolved dependencies
@@ -493,6 +516,10 @@ sub unregister_worker {
     my ( $self, $id ) = @_;
     my $redis = $self->redis->db;
     _delete_worker( $redis, $id );
+}
+
+sub _flatten {    # no prototype for this one to avoid warnings
+    return map { ref eq 'ARRAY' ? _flatten(@$_) : $_ } @_;
 }
 
 sub _delete_job {
