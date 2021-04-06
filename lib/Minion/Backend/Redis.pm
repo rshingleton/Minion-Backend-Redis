@@ -270,13 +270,15 @@ sub lock {
         '(' . time );
     my $redis = $self->redis->db;
     my $locks = $redis->zcard("minion.lock.$name");
+
     $redis->watch("minion.lock.$name");
     $redis->multi;
     return !!0 if $locks >= ( $options->{limit} || 1 );
+
     if ( defined $duration and $duration > 0 ) {
-        my $lock_id = $self->redis->db->incr('minion.last_lock_id');
-        $redis->zadd( "minion.lock.$name", ( time + $duration ) => $lock_id );
-        $redis->exec;
+        $self->redis->db->incr('minion.last_lock_id');
+        my $lock_id = $redis->exec;
+        $redis->zadd( "minion.lock.$name", time + $duration, $lock_id );
     }
     return !!1;
 }
