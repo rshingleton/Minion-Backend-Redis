@@ -381,6 +381,50 @@ Id of worker that is processing the job.
 
 =back
 
+=head2 list_locks
+
+  my $results = $backend->list_locks($offset, $limit);
+  my $results = $backend->list_locks($offset, $limit, {names => ['foo']});
+
+Returns information about locks in batches.
+
+  # Get the total number of results (without limit)
+  my $num = $backend->list_locks(0, 100, {names => ['bar']})->{total};
+
+  # Check expiration time
+  my $results = $backend->list_locks(0, 1, {names => ['foo']});
+  my $expires = $results->{locks}[0]{expires};
+
+These options are currently available:
+
+=over 2
+
+=item names
+
+  names => ['foo', 'bar']
+
+List only locks with these names.
+
+=back
+
+These fields are currently available:
+
+=over 2
+
+=item expires
+
+  expires => 784111777
+
+Epoch time this lock will expire.
+
+=item name
+
+  name => 'foo'
+
+Lock name.
+
+=back
+
 =head2 list_workers
 
   my $results = $backend->list_workers($offset, $limit);

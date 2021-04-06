@@ -782,6 +782,31 @@ L<Minion::Backend::Redis> is a backend for L<Minion> based on L<Mojo::Redis>.
 Note that L<Redis Server|https://redis.io/download> version C<2.8.0> or newer
 is required to use this backend.
 
+=head1 CAUTION
+
+This is a slightly hackish modification of the original code by L<Dan Book|https://github.com/Grinnz/Minion-Backend-Redis> to use L<Mojo::Redis> instead of L<Mojo::Redis2>.
+
+Due to the original code being written against an older Minion version, "history" is currently unimplemented.
+
+=head1 PERFORMANCE
+
+You can run examples/minion_bench.pl to get some performance metrics.  
+
+  Clean start with 10000 jobs
+  Enqueued 10000 jobs in 52.6373450756073 seconds (189.979/s)
+  4 workers finished 1000 jobs each in 76.6429250240326 seconds (52.190/s)
+  4 workers finished 1000 jobs each in 64.2053661346436 seconds (62.300/s)
+  Requesting job info 100 times
+  Received job info 100 times in 0.783659934997559 seconds (127.606/s)
+  Requesting stats 100 times
+  Received stats 100 times in 0.595925092697144 seconds (167.806/s)
+  Repairing 100 times
+  Repaired 100 times in 0.28698992729187 seconds (348.444/s)
+  Acquiring locks 1000 times
+  Acquired locks 1000 times in 2.0602331161499 seconds (485.382/s)
+  Releasing locks 1000 times
+  Releasing locks 1000 times in 1.19675707817078 seconds (835.591/s)
+
 =head1 ATTRIBUTES
 
 L<Minion::Backend::Redis> inherits all attributes from L<Minion::Backend> and
@@ -790,9 +815,9 @@ implements the following new ones.
 =head2 redis
 
   my $redis = $backend->redis;
-  $backend  = $backend->redis(Mojo::Redis2->new);
+  $backend  = $backend->redis(Mojo::Redis->new);
 
-L<Mojo::Redis2> object used to store all data.
+L<Mojo::Redis> object used to store all data.
 
 =head1 METHODS
 
@@ -945,7 +970,7 @@ Transition from C<active> to C<finished> state.
 
   my $history = $backend->history;
 
-Get history information for job queue.
+Get history information for job queue. Unimplemented for now.
 
 These fields are currently available:
 
@@ -1121,6 +1146,7 @@ Returns information about locks in batches.
 
   # Get the total number of results (without limit)
   my $num = $backend->list_locks(0, 100, {names => ['bar']})->{total};
+
   # Check expiration time
   my $results = $backend->list_locks(0, 1, {names => ['foo']});
   my $expires = $results->{locks}[0]{expires};
@@ -1429,4 +1455,4 @@ This is free software, licensed under:
 
 =head1 SEE ALSO
 
-L<Minion>, L<Mojo::Redis2>
+L<Minion>, L<Mojo::Redis>
