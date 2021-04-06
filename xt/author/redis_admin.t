@@ -13,6 +13,7 @@ use Test::Mojo;
 
 plugin Minion => { Redis => Mojo::Redis->new->url };
 
+app->minion->reset;
 app->minion->add_task( test => sub { } );
 my $finished = app->minion->enqueue('test');
 app->minion->perform_jobs;
@@ -62,7 +63,7 @@ subtest 'Locks' => sub {
     $t->app->minion->lock( 'bar', 3600 );
     $t->ua->max_redirects(5);
     $t->get_ok('/minion/locks')->status_is(200)
-      ->text_like( 'tbody td a' => qr/bar/ );
+      ->text_like( 'tbody td a' => qr/foo/ );
     $t->get_ok('/minion/locks?name=foo')->status_is(200)
       ->text_like( 'tbody td a' => qr/foo/ );
     $t->post_ok('/minion/locks?_method=DELETE&name=bar')->status_is(200)

@@ -53,25 +53,11 @@ sub dequeue {
     return undef if Mojo::IOLoop->is_running;
 
     my $pubsub = $self->redis->pubsub;
-    my $timer  = Mojo::IOLoop->timer(
-        $wait => sub {
-            $pubsub->unlisten('minion.job');
-            Mojo::IOLoop->stop;
-        }
-    );
-
-    $pubsub->listen(
-        "minion.job" => sub {
-            my ( $pubsub, $message ) = @_;
-
-            if ( $message eq '' ) {
-                Mojo::IOLoop->remove($timer);
-                $pubsub->unlisten('minion.job');
-                Mojo::IOLoop->stop;
-            }
-        }
-    );
+    $pubsub->listen( "minion.job" => sub { Mojo::IOLoop->stop } );
+    my $timer = Mojo::IOLoop->timer( $wait => sub { Mojo::IOLoop->stop } );
     Mojo::IOLoop->start;
+    $pubsub->unlisten('minion.job') and Mojo::IOLoop->remove($timer);
+    undef $pubsub;
 
     return $self->_try( $id, $options );
 }
@@ -217,12 +203,43 @@ sub list_jobs {
 sub list_locks {
     my ( $self, $offset, $limit, $options ) = @_;
 
-    my $keys  = $self->redis->db->keys('minion.lock.*');
-    my $total = scalar @$keys;
+    my $redis = $self->redis->db;
+    my $keys  = $redis->keys('minion.lock.*');
     my @locks;
-    foreach my $lock (@$keys) {
-        my %lock_info = %{ $self->redis->db->hgetall($lock) };
-        push @locks, %lock_info;
+    foreach my $name (@$keys) {
+
+        my $jobname = substr( $name, 12 );
+
+        # Filter out the job if the name is wrong
+        if ( defined( my $names = $options->{names} ) ) {
+            my %split_names = map { $_ => 1 } @$names;
+            unless ( exists( $split_names{$jobname} ) ) { next; }
+        }
+
+        my %named_locks =
+          @{ $redis->zrangebyscore( $name, '-inf', '+inf', 'WITHSCORES' ) };
+
+        foreach my $lock_id ( keys %named_locks ) {
+
+            # Craft lock info hashes by hand.
+            push @locks,
+              {
+                name    => $jobname,
+                expires => $named_locks{$lock_id}
+              };
+        }
+    }
+
+    # Reorder locks by expiration date
+    @locks = sort { $a->{expires} cmp $b->{expires} } @locks;
+    my $total = scalar @locks;
+
+    if ( $offset > 0 ) {
+        splice( @locks, 0, $offset );
+    }
+
+    if ( $limit > 0 ) {
+        splice( @locks, $limit );
     }
 
     return { locks => \@locks, total => $total };
@@ -277,8 +294,8 @@ sub lock {
 
     if ( defined $duration and $duration > 0 ) {
         $self->redis->db->incr('minion.last_lock_id');
-        my $lock_id = $redis->exec;
-        $redis->zadd( "minion.lock.$name", time + $duration, $lock_id );
+        my @lock_id = @{ $redis->exec };
+        $redis->zadd( "minion.lock.$name", time + $duration, $lock_id[0] );
     }
     return !!1;
 }
@@ -486,6 +503,15 @@ sub stats {
     $stats{delayed_jobs} =
       $self->redis->db->zcount( 'minion.inactive_job_delayed', time, '+inf' );
     $stats{active_workers} = 0;
+
+    my $locks = 0;
+    my $keys  = $self->redis->db->keys('minion.lock.*');
+
+    foreach my $name (@$keys) {
+        $locks += $self->redis->db->zcount( $name, time, '+inf' );
+    }
+
+    $stats{active_locks} = $locks;
 
     foreach my $id ( @{ $self->redis->db->smembers('minion.workers') } ) {
         $stats{active_workers}++
@@ -1083,6 +1109,49 @@ Task name.
   worker => '154'
 
 Id of worker that is processing the job.
+
+=back
+
+=head2 list_locks
+
+  my $results = $backend->list_locks($offset, $limit);
+  my $results = $backend->list_locks($offset, $limit, {names => ['foo']});
+
+Returns information about locks in batches.
+
+  # Get the total number of results (without limit)
+  my $num = $backend->list_locks(0, 100, {names => ['bar']})->{total};
+  # Check expiration time
+  my $results = $backend->list_locks(0, 1, {names => ['foo']});
+  my $expires = $results->{locks}[0]{expires};
+
+These options are currently available:
+
+=over 2
+
+=item names
+
+  names => ['foo', 'bar']
+
+List only locks with these names.
+
+=back
+
+These fields are currently available:
+
+=over 2
+
+=item expires
+
+  expires => 784111777
+
+Epoch time this lock will expire.
+
+=item name
+
+  name => 'foo'
+
+Lock name.
 
 =back
 
