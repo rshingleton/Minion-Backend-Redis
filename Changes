@@ -1,4 +1,6 @@
 {{$NEXT}}
+
+0.003     2021-08-18 15:28:23 CEST
   - Fixed tests to not fail if there's no Redis server running
 
 0.002     2021-04-06 17:46:56 CEST
