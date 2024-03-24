@@ -11,6 +11,7 @@ use Mojo::Util 'encode';
 use Sort::Versions 'versioncmp';
 use Sys::Hostname 'hostname';
 use Time::HiRes 'time';
+use Time::Piece;
 
 use Data::Dumper;
 
@@ -19,63 +20,63 @@ our $VERSION = '0.004';
 has 'redis';
 
 sub new {
-    my $self = shift->SUPER::new( redis => Mojo::Redis->new(@_) );
+    my $self = shift->SUPER::new(redis => Mojo::Redis->new(@_));
 
     my $redis_version =
-      $self->redis->db->info_structured('server')->{redis_version};
+        $self->redis->db->info_structured('server')->{redis_version};
     croak 'Redis Server 2.8.0 or later is required'
-      if versioncmp( $redis_version, '2.8.0' ) == -1;
+        if versioncmp($redis_version, '2.8.0') == -1;
 
     return $self;
 }
 
 sub broadcast {
-    my ( $self, $command, $args, $ids ) =
-      ( shift, shift, shift || [], shift || [] );
-    my $item = to_json( [ $command, @$args ] );
+    my ($self, $command, $args, $ids) =
+        (shift, shift, shift || [], shift || []);
+    my $item = to_json([ $command, @$args ]);
     my %worker_ids =
-      map { ( $_ => 1 ) } @{ $self->redis->db->smembers('minion.workers') };
+        map {($_ => 1)} @{$self->redis->db->smembers('minion.workers')};
     $ids =
-      @$ids
-      ? [ grep { exists $worker_ids{$_} } @$ids ]
-      : [ keys %worker_ids ];
+        @$ids
+            ? [ grep {exists $worker_ids{$_}} @$ids ]
+            : [ keys %worker_ids ];
     my $redis = $self->redis->db;
     $redis->multi;
-    $redis->rpush( "minion.worker.$_.inbox", $item ) for @$ids;
+    $redis->rpush("minion.worker.$_.inbox", $item) for @$ids;
     $redis->exec;
     return !!@$ids;
 }
 
 sub dequeue {
-    my ( $self, $id, $wait, $options ) = @_;
+    my ($self, $id, $wait, $options) = @_;
 
-    if ( ( my $job = $self->_try( $id, $options ) ) ) { return $job }
+    if ((my $job = $self->_try($id, $options))) {return $job}
     return undef if Mojo::IOLoop->is_running;
 
     my $pubsub = $self->redis->pubsub;
-    $pubsub->listen( "minion.job" => sub { Mojo::IOLoop->stop } );
-    my $timer = Mojo::IOLoop->timer( $wait => sub { Mojo::IOLoop->stop } );
+    $pubsub->listen("minion.job" => sub {Mojo::IOLoop->stop});
+    my $timer = Mojo::IOLoop->timer($wait => sub {Mojo::IOLoop->stop});
     Mojo::IOLoop->start;
     $pubsub->unlisten('minion.job') and Mojo::IOLoop->remove($timer);
     undef $pubsub;
 
-    return $self->_try( $id, $options );
+    return $self->_try($id, $options);
 }
 
 sub enqueue {
-    my ( $self, $task, $args, $options ) =
-      ( shift, shift, shift || [], shift || {} );
+    my ($self, $task, $args, $options) =
+        (shift, shift, shift || [], shift || {});
 
     my $id = $self->redis->db->incr('minion.last_job_id');
 
-    my %notes = %{ $options->{notes} || {} };
+    my %notes = %{$options->{notes} || {}};
     $_ = to_json($_) for values %notes;
-    my $parents  = $options->{parents} || [];
-    my $queue    = $options->{queue} // 'default';
+    my $parents = $options->{parents} || [];
+    my $queue = $options->{queue} // 'default';
     my $attempts = $options->{attempts} // 1;
     my $priority = $options->{priority} // 0;
-    my $now      = time;
-    my $delayed  = $now + ( $options->{delay} // 0 );
+    my $now = time;
+    my $delayed = $now + ($options->{delay} // 0);
 
     my $redis = $self->redis->db;
     $redis->multi;
@@ -94,21 +95,21 @@ sub enqueue {
         task     => $task,
     );
 
-    $redis->hmset( "minion.job.$id.notes", %notes ) if %notes;
-    $redis->sadd( "minion.job.$id.parents", @$parents ) if @$parents;
-    $redis->sadd( "minion.job.$_.children", $id ) for @$parents;
+    $redis->hmset("minion.job.$id.notes", %notes) if %notes;
+    $redis->sadd("minion.job.$id.parents", @$parents) if @$parents;
+    $redis->sadd("minion.job.$_.children", $id) for @$parents;
 
-    $redis->sadd( "minion.job_queue.$queue",                 $id );
-    $redis->sadd( 'minion.job_state.inactive',               $id );
-    $redis->sadd( 'minion.job_state.inactive,active,failed', $id );
-    $redis->sadd( "minion.job_task.$task",                   $id );
-    $redis->sadd( 'minion.jobs',                             $id );
+    $redis->sadd("minion.job_queue.$queue", $id);
+    $redis->sadd('minion.job_state.inactive', $id);
+    $redis->sadd('minion.job_state.inactive,active,failed', $id);
+    $redis->sadd("minion.job_task.$task", $id);
+    $redis->sadd('minion.jobs', $id);
 
     my $alphaid = sprintf '%012d', $id;
-    $redis->zadd( "minion.inactive_job_queue.$queue",
-        ( 0 - $priority ) => $alphaid );
-    $redis->zadd( "minion.inactive_job_task.$task", 0        => $alphaid );
-    $redis->zadd( 'minion.inactive_job_delayed',    $delayed => $id );
+    $redis->zadd("minion.inactive_job_queue.$queue",
+        (0 - $priority) => $alphaid);
+    $redis->zadd("minion.inactive_job_task.$task", 0 => $alphaid);
+    $redis->zadd('minion.inactive_job_delayed', $delayed => $id);
 
     $redis->exec;
 
@@ -117,136 +118,153 @@ sub enqueue {
     return $id;
 }
 
-sub fail_job   { shift->_update( 1, @_ ) }
-sub finish_job { shift->_update( 0, @_ ) }
+sub fail_job {shift->_update(1, @_)}
+sub finish_job {shift->_update(0, @_)}
 
 sub history {
     my $self = shift;
+    my $now = localtime();
+    my $redis = $self->redis->db;
+    my $res = $redis->keys("minion.job.*");
 
-    my $db = $self->redis->db;
+    my $history;
+    foreach my $id (@$res) {
+        my $info = $self->redis->db->hgetall($id);
+        my $t = localtime($info->{finished});
+        my $diff = $now - $t;
+        next if ($diff->minutes > 1440);
 
-    # TODO: Not implemented.
-    my @daily_ordered = [];
+        my $day_hour = Time::Piece->strptime($t->ymd . " " . $t->hour, "%Y-%m-%d %H");
+        $history->{$day_hour->epoch} //= { epoch => $day_hour->epoch, finished_jobs => 0, failed_jobs => 0 };
+        $history->{$day_hour->epoch}->{finished_jobs}++ if $info->{state} eq 'finished';
+        $history->{$day_hour->epoch}->{failed_jobs}++ if $info->{state} eq 'failed';
+    }
+
+    my @daily_ordered;
+    for (sort keys %{$history}) {
+        push(@daily_ordered, $history->{$_});
+    }
+
     return { daily => \@daily_ordered };
 }
 
 sub list_jobs {
-    my ( $self, $offset, $limit, $options ) = @_;
+    my ($self, $offset, $limit, $options) = @_;
 
     my $redis = $self->redis->db;
     $redis->multi;
     my @sets = (
         'minion.jobs',
-        map    { "minion.job_$_.$options->{$_}" }
-          grep { defined $options->{$_} } qw(queue state task)
+        map {"minion.job_$_.$options->{$_}"}
+            grep {defined $options->{$_}} qw(queue state task)
     );
-    if ( defined( my $ids = $options->{ids} ) ) {
-        my $key = 'minion.temp.jobs.' . join( ',', @$ids );
+    if (defined(my $ids = $options->{ids})) {
+        my $key = 'minion.temp.jobs.' . join(',', @$ids);
         $redis->del($key);
-        $redis->sadd( $key, @$ids ) if @$ids;
-        $redis->expire( $key, 60 );
+        $redis->sadd($key, @$ids) if @$ids;
+        $redis->expire($key, 60);
         push @sets, $key;
     }
 
-    if ( defined( my $notes = $options->{notes} ) ) {
+    if (defined(my $notes = $options->{notes})) {
         croak 'Listing jobs by existence of notes is unimplemented';
     }
 
-    my $jobs_hash = sha256_base64( join '$', $$, time );
-    my $jobs_key  = "minion.temp.list_jobs.$jobs_hash";
-    $redis->sinterstore( $jobs_key, @sets );
-    $redis->expire( $jobs_key, 60 );
+    my $jobs_hash = sha256_base64(join '$', $$, time);
+    my $jobs_key = "minion.temp.list_jobs.$jobs_hash";
+    $redis->sinterstore($jobs_key, @sets);
+    $redis->expire($jobs_key, 60);
     $redis->exec;
 
-    my $job_ids = $redis->sort( $jobs_key, LIMIT => $offset, $limit, 'DESC' );
-    my $total   = $redis->scard($jobs_key);
+    my $job_ids = $redis->sort($jobs_key, LIMIT => $offset, $limit, 'DESC');
+    my $total = $redis->scard($jobs_key);
 
     my @jobs;
     foreach my $id (@$job_ids) {
 
-        my %job_info = %{ $redis->hgetall("minion.job.$id") };
+        my %job_info = %{$redis->hgetall("minion.job.$id")};
         my $children = $redis->smembers("minion.job.$id.children");
-        my %notes    = %{ $redis->hgetall("minion.job.$id.notes") };
+        my %notes = %{$redis->hgetall("minion.job.$id.notes")};
         $_ = from_json($_) for values %notes;
 
-        if ( defined( my $states = $options->{states} ) ) {
-            unless ( grep { $_ eq $job_info{state} } @$states ) {
+        if (defined(my $states = $options->{states})) {
+            unless (grep {$_ eq $job_info{state}} @$states) {
                 next;
             }
         }
 
         push @jobs,
-          {
-            id       => $job_info{id},
-            args     => from_json( $job_info{args} // 'null' ),
-            attempts => $job_info{attempts},
-            children => $children,
-            created  => $job_info{created},
-            delayed  => $job_info{delayed},
-            finished => $job_info{finished},
-            notes    => \%notes,
-            parents  => from_json( $job_info{parents} // 'null' ),
-            priority => $job_info{priority},
-            queue    => $job_info{queue},
-            result   => from_json( $job_info{result} // 'null' ),
-            retried  => $job_info{retried},
-            retries  => $job_info{retries},
-            started  => $job_info{started},
-            state    => $job_info{state},
-            task     => $job_info{task},
-            worker   => $job_info{worker},
-          };
+            {
+                id       => $job_info{id},
+                args     => from_json($job_info{args} // 'null'),
+                attempts => $job_info{attempts},
+                children => $children,
+                created  => $job_info{created},
+                delayed  => $job_info{delayed},
+                finished => $job_info{finished},
+                notes    => \%notes,
+                parents  => from_json($job_info{parents} // 'null'),
+                priority => $job_info{priority},
+                queue    => $job_info{queue},
+                result   => from_json($job_info{result} // 'null'),
+                retried  => $job_info{retried},
+                retries  => $job_info{retries},
+                started  => $job_info{started},
+                state    => $job_info{state},
+                task     => $job_info{task},
+                worker   => $job_info{worker},
+            };
     }
     return { jobs => \@jobs, total => $total };
 }
 
 sub list_locks {
-    my ( $self, $offset, $limit, $options ) = @_;
+    my ($self, $offset, $limit, $options) = @_;
 
     my $redis = $self->redis->db;
-    my $keys  = $redis->keys('minion.lock.*');
+    my $keys = $redis->keys('minion.lock.*');
     my @locks;
     foreach my $name (@$keys) {
 
-        my $jobname = substr( $name, 12 );
+        my $jobname = substr($name, 12);
 
         # Filter out the job if the name is wrong
-        if ( defined( my $names = $options->{names} ) ) {
-            my %split_names = map { $_ => 1 } @$names;
-            unless ( exists( $split_names{$jobname} ) ) { next; }
+        if (defined(my $names = $options->{names})) {
+            my %split_names = map {$_ => 1} @$names;
+            unless (exists($split_names{$jobname})) {next;}
         }
 
         my %named_locks =
-          @{ $redis->zrangebyscore( $name, '-inf', '+inf', 'WITHSCORES' ) };
+            @{$redis->zrangebyscore($name, '-inf', '+inf', 'WITHSCORES')};
 
-        foreach my $lock_id ( keys %named_locks ) {
+        foreach my $lock_id (keys %named_locks) {
 
             # Craft lock info hashes by hand.
             push @locks,
-              {
-                name    => $jobname,
-                expires => $named_locks{$lock_id}
-              };
+                {
+                    name    => $jobname,
+                    expires => $named_locks{$lock_id}
+                };
         }
     }
 
     # Reorder locks by expiration date
-    @locks = sort { $a->{expires} cmp $b->{expires} } @locks;
+    @locks = sort {$a->{expires} cmp $b->{expires}} @locks;
     my $total = scalar @locks;
 
-    if ( $offset > 0 ) {
-        splice( @locks, 0, $offset );
+    if ($offset > 0) {
+        splice(@locks, 0, $offset);
     }
 
-    if ( $limit > 0 ) {
-        splice( @locks, $limit );
+    if ($limit > 0) {
+        splice(@locks, $limit);
     }
 
     return { locks => \@locks, total => $total };
 }
 
 sub list_workers {
-    my ( $self, $offset, $limit, $options ) = @_;
+    my ($self, $offset, $limit, $options) = @_;
 
     my $worker_ids = $self->redis->db->sort(
         'minion.workers',
@@ -258,66 +276,66 @@ sub list_workers {
     my @workers;
     foreach my $id (@$worker_ids) {
 
-        my %worker_info = %{ $self->redis->db->hgetall("minion.worker.$id") };
+        my %worker_info = %{$self->redis->db->hgetall("minion.worker.$id")};
 
         my $notified =
-          $self->redis->db->zscore( 'minion.worker_notified', $id );
-        my $jobs = $self->redis->db->sinter( "minion.worker.$id.jobs",
-            'minion.job_state.active' );
+            $self->redis->db->zscore('minion.worker_notified', $id);
+        my $jobs = $self->redis->db->sinter("minion.worker.$id.jobs",
+            'minion.job_state.active');
 
         push @workers,
-          {
-            id       => $worker_info{id},
-            notified => $notified,
-            jobs     => $jobs,
-            host     => $worker_info{host},
-            pid      => $worker_info{pid},
-            status   => from_json( $worker_info{status} // 'null' ),
-            started  => $worker_info{started},
-          };
+            {
+                id       => $worker_info{id},
+                notified => $notified,
+                jobs     => $jobs,
+                host     => $worker_info{host},
+                pid      => $worker_info{pid},
+                status   => from_json($worker_info{status} // 'null'),
+                started  => $worker_info{started},
+            };
     }
 
     return { total => $total, workers => \@workers };
 }
 
 sub lock {
-    my ( $self, $name, $duration, $options ) =
-      ( shift, shift, shift, shift // {} );
-    $self->redis->db->zremrangebyscore( "minion.lock.$name", '-inf',
-        '(' . time );
+    my ($self, $name, $duration, $options) =
+        (shift, shift, shift, shift // {});
+    $self->redis->db->zremrangebyscore("minion.lock.$name", '-inf',
+        '(' . time);
     my $redis = $self->redis->db;
     my $locks = $redis->zcard("minion.lock.$name");
 
     $redis->watch("minion.lock.$name");
     $redis->multi;
-    return !!0 if $locks >= ( $options->{limit} || 1 );
+    return !!0 if $locks >= ($options->{limit} || 1);
 
-    if ( defined $duration and $duration > 0 ) {
+    if (defined $duration and $duration > 0) {
         $self->redis->db->incr('minion.last_lock_id');
-        my @lock_id = @{ $redis->exec };
-        $redis->zadd( "minion.lock.$name", time + $duration, $lock_id[0] );
+        my @lock_id = @{$redis->exec};
+        $redis->zadd("minion.lock.$name", time + $duration, $lock_id[0]);
     }
     return !!1;
 }
 
 sub note {
-    my ( $self, $id, $merge ) = @_;
+    my ($self, $id, $merge) = @_;
     my $redis = $self->redis->db;
     return !!0 unless $redis->exists("minion.job.$id");
     $redis->watch("minion.job.$id");
     $redis->multi;
 
-    foreach my $key ( keys %$merge ) {
+    foreach my $key (keys %$merge) {
 
         croak qq{Invalid note key '$key'; must not contain '.', '[', or ']'}
-          if $key =~ m/[\[\].]/;
+            if $key =~ m/[\[\].]/;
 
-        if ( defined $merge->{$key} ) {
-            $redis->hset( "minion.job.$id.notes", $key,
-                to_json( $merge->{$key} ) );
+        if (defined $merge->{$key}) {
+            $redis->hset("minion.job.$id.notes", $key,
+                to_json($merge->{$key}));
         }
         else {
-            $redis->hdel( "minion.job.$id.notes", $key );
+            $redis->hdel("minion.job.$id.notes", $key);
         }
     }
 
@@ -326,18 +344,18 @@ sub note {
 }
 
 sub receive {
-    my ( $self, $id ) = @_;
+    my ($self, $id) = @_;
     my $redis = $self->redis->db;
-    my $items = $redis->lrange( "minion.worker.$id.inbox", 0, -1 );
+    my $items = $redis->lrange("minion.worker.$id.inbox", 0, -1);
     $redis->watch("minion.worker.$id.inbox");
     $redis->multi;
     $redis->del("minion.worker.$id.inbox");
     $redis->exec;
-    return [ map { from_json($_) } @$items ];
+    return [ map {from_json($_)} @$items ];
 }
 
 sub register_worker {
-    my ( $self, $id, $options ) = ( shift, shift, shift || {} );
+    my ($self, $id, $options) = (shift, shift, shift || {});
 
     $id //= $self->redis->db->incr('minion.last_worker_id');
 
@@ -348,34 +366,34 @@ sub register_worker {
     $redis->hmset(
         "minion.worker.$id",
         id     => $id,
-        status => to_json( $options->{status} // {} ),
+        status => to_json($options->{status} // {}),
     );
-    $redis->hsetnx( "minion.worker.$id", host => $self->{host} //= hostname );
-    $redis->hsetnx( "minion.worker.$id", pid  => $$ );
-    $redis->hsetnx( "minion.worker.$id", started => $now );
-    $redis->zadd( 'minion.worker_notified', $now => $id );
-    $redis->sadd( 'minion.workers', $id );
+    $redis->hsetnx("minion.worker.$id", host => $self->{host} //= hostname);
+    $redis->hsetnx("minion.worker.$id", pid => $$);
+    $redis->hsetnx("minion.worker.$id", started => $now);
+    $redis->zadd('minion.worker_notified', $now => $id);
+    $redis->sadd('minion.workers', $id);
     $redis->exec;
 
     return $id;
 }
 
 sub remove_job {
-    my ( $self, $id ) = @_;
+    my ($self, $id) = @_;
 
     my $redis = $self->redis->db;
-    my ( $queue, $state, $task, $worker ) =
-      @{ $redis->hmget( "minion.job.$id", qw(queue state task worker) ) };
+    my ($queue, $state, $task, $worker) =
+        @{$redis->hmget("minion.job.$id", qw(queue state task worker))};
     return !!0
-      unless defined $state
-      and ($state eq 'inactive'
-        or $state eq 'failed'
-        or $state eq 'finished' );
+        unless defined $state
+            and ($state eq 'inactive'
+            or $state eq 'failed'
+            or $state eq 'finished');
 
     $redis->watch("minion.job.$id");
     $redis->multi;
 
-    _delete_job( $redis, $id, $queue, $state, $task, $worker );
+    _delete_job($redis, $id, $queue, $state, $task, $worker);
     $redis->exec;
 
     return 1;
@@ -385,18 +403,18 @@ sub repair {
     my $self = shift;
 
     # Workers without heartbeat
-    my $redis  = $self->redis->db;
+    my $redis = $self->redis->db;
     my $minion = $self->minion;
     $redis->watch('minion.worker_notified');
-    my $missing = $redis->zrangebyscore( 'minion.worker_notified',
-        '-inf', '(' . ( time - $minion->missing_after ) );
-    _delete_worker( $redis, $_ ) for @$missing;
+    my $missing = $redis->zrangebyscore('minion.worker_notified',
+        '-inf', '(' . (time - $minion->missing_after));
+    _delete_worker($redis, $_) for @$missing;
 
     # Jobs with missing worker (can be retried)
     $redis->watch('minion.jobs_missing_worker');
     $redis->multi;
 
-    $redis->sinter( 'minion.job_state.active', 'minion.jobs_missing_worker' );
+    $redis->sinter('minion.job_state.active', 'minion.jobs_missing_worker');
     $redis->del('minion.jobs_missing_worker');
     my $orphaned_jobs = $redis->exec;
 
@@ -404,28 +422,28 @@ sub repair {
     my @flattened_jobs = _flatten(@$orphaned_jobs);
 
     foreach my $id (@flattened_jobs) {
-        my ( $queue, $retries ) =
-          @{ $redis->hmget( "minion.job.$id", qw(queue retries) ) };
+        my ($queue, $retries) =
+            @{$redis->hmget("minion.job.$id", qw(queue retries))};
 
-        if ( !$queue || $queue ne "minion_foreground" ) {
-            $self->fail_job( $id, $retries, 'Worker went away' );
+        if (!$queue || $queue ne "minion_foreground") {
+            $self->fail_job($id, $retries, 'Worker went away');
         }
     }
 
     # Old jobs with no unresolved dependencies
-    my $old_jobs = $redis->zrangebyscore( 'minion.job_finished',
-        '-inf', '(' . ( time - $minion->remove_after ) );
+    my $old_jobs = $redis->zrangebyscore('minion.job_finished',
+        '-inf', '(' . (time - $minion->remove_after));
     foreach my $id (@$old_jobs) {
-        my ( $queue, $state, $task, $worker ) =
-          @{ $redis->hmget( "minion.job.$id", qw(queue state task worker) ) };
+        my ($queue, $state, $task, $worker) =
+            @{$redis->hmget("minion.job.$id", qw(queue state task worker))};
         next
-          if @{
-            $redis->sdiff( "minion.job.$id.children",
-                'minion.job_state.finished' )
-          };
-        $redis->watch( "minion.job.$id", "minion.job.$id.children" );
+            if @{
+                $redis->sdiff("minion.job.$id.children",
+                    'minion.job_state.finished')
+                };
+        $redis->watch("minion.job.$id", "minion.job.$id.children");
         $redis->multi;
-        _delete_job( $redis, $id, $queue, $state, $task, $worker );
+        _delete_job($redis, $id, $queue, $state, $task, $worker);
         $redis->exec;
     }
 }
@@ -433,7 +451,7 @@ sub repair {
 sub reset {
     my ($self) = @_;
     my $redis = $self->redis->db;
-    $redis->watch( 'minion.jobs', 'minion.workers' );
+    $redis->watch('minion.jobs', 'minion.workers');
     my $keys = $redis->keys('minion.*');
     $redis->multi;
     $redis->del(@$keys) if @$keys;
@@ -441,47 +459,47 @@ sub reset {
 }
 
 sub retry_job {
-    my ( $self, $id, $retries, $options ) =
-      ( shift, shift, shift, shift || {} );
+    my ($self, $id, $retries, $options) =
+        (shift, shift, shift, shift || {});
 
     my $now = time;
     my %set;
     $set{attempts} = $options->{attempts} if defined $options->{attempts};
-    $set{delayed}  = my $delayed = $now + ( $options->{delay} // 0 );
+    $set{delayed} = my $delayed = $now + ($options->{delay} // 0);
     $set{priority} = $options->{priority} if defined $options->{priority};
-    $set{retried}  = $now;
+    $set{retried} = $now;
 
     my $redis = $self->redis->db;
     $redis->watch("minion.job.$id");
-    my ( $curr_queue, $curr_priority, $curr_retries, $curr_state, $task ) = @{
-        $self->redis->db->hmget( "minion.job.$id",
-            qw(queue priority retries state task) )
-    };
+    my ($curr_queue, $curr_priority, $curr_retries, $curr_state, $task) = @{
+        $self->redis->db->hmget("minion.job.$id",
+            qw(queue priority retries state task))
+        };
     return !!0 unless defined $curr_retries and $curr_retries == $retries;
 
     $redis->multi;
-    $redis->hmset( "minion.job.$id", %set );
-    $redis->hincrby( "minion.job.$id", retries => 1 );
+    $redis->hmset("minion.job.$id", %set);
+    $redis->hincrby("minion.job.$id", retries => 1);
 
     my $alphaid = sprintf '%012d', $id;
-    if ( defined $options->{queue} ) {
-        $redis->hset( "minion.job.$id", queue => $options->{queue} );
-        $redis->srem( "minion.job_queue.$curr_queue", $id );
-        $redis->sadd( "minion.job_queue.$options->{queue}", $id );
-        $redis->zrem( "minion.inactive_job_queue.$curr_queue", $alphaid );
+    if (defined $options->{queue}) {
+        $redis->hset("minion.job.$id", queue => $options->{queue});
+        $redis->srem("minion.job_queue.$curr_queue", $id);
+        $redis->sadd("minion.job_queue.$options->{queue}", $id);
+        $redis->zrem("minion.inactive_job_queue.$curr_queue", $alphaid);
     }
 
-    $redis->hset( "minion.job.$id", state => 'inactive' );
-    $redis->srem( "minion.job_state.$curr_state", $id );
-    $redis->sadd( 'minion.job_state.inactive',               $id );
-    $redis->sadd( 'minion.job_state.inactive,active,failed', $id );
+    $redis->hset("minion.job.$id", state => 'inactive');
+    $redis->srem("minion.job_state.$curr_state", $id);
+    $redis->sadd('minion.job_state.inactive', $id);
+    $redis->sadd('minion.job_state.inactive,active,failed', $id);
 
     my $priority = $options->{priority} // $curr_priority;
-    my $queue    = $options->{queue}    // $curr_queue;
-    $redis->zadd( "minion.inactive_job_queue.$queue",
-        ( 0 - $priority ) => $alphaid );
-    $redis->zadd( "minion.inactive_job_task.$task", 0        => $alphaid );
-    $redis->zadd( 'minion.inactive_job_delayed',    $delayed => $id );
+    my $queue = $options->{queue} // $curr_queue;
+    $redis->zadd("minion.inactive_job_queue.$queue",
+        (0 - $priority) => $alphaid);
+    $redis->zadd("minion.inactive_job_task.$task", 0 => $alphaid);
+    $redis->zadd('minion.inactive_job_delayed', $delayed => $id);
 
     $redis->exec;
 
@@ -495,142 +513,141 @@ sub stats {
 
     my %stats;
     $stats{inactive_jobs} =
-      $self->redis->db->scard('minion.job_state.inactive');
+        $self->redis->db->scard('minion.job_state.inactive');
     $stats{active_jobs} = $self->redis->db->scard('minion.job_state.active');
     $stats{failed_jobs} = $self->redis->db->scard('minion.job_state.failed');
     $stats{finished_jobs} =
-      $self->redis->db->scard('minion.job_state.finished');
+        $self->redis->db->scard('minion.job_state.finished');
     $stats{delayed_jobs} =
-      $self->redis->db->zcount( 'minion.inactive_job_delayed', time, '+inf' );
+        $self->redis->db->zcount('minion.inactive_job_delayed', time, '+inf');
     $stats{active_workers} = 0;
 
     my $locks = 0;
-    my $keys  = $self->redis->db->keys('minion.lock.*');
+    my $keys = $self->redis->db->keys('minion.lock.*');
 
     foreach my $name (@$keys) {
-        $locks += $self->redis->db->zcount( $name, time, '+inf' );
+        $locks += $self->redis->db->zcount($name, time, '+inf');
     }
 
     $stats{active_locks} = $locks;
 
-    foreach my $id ( @{ $self->redis->db->smembers('minion.workers') } ) {
+    foreach my $id (@{$self->redis->db->smembers('minion.workers')}) {
         $stats{active_workers}++
-          if @{
-            $self->redis->db->sinter( 'minion.job_state.active',
-                "minion.worker.$id.jobs" )
-          };
+            if @{
+                $self->redis->db->sinter('minion.job_state.active',
+                    "minion.worker.$id.jobs")
+                };
     }
     $stats{enqueued_jobs} = $self->redis->db->get('minion.last_job_id') // 0;
     $stats{inactive_workers} =
-      $self->redis->db->scard('minion.workers') - $stats{active_workers};
+        $self->redis->db->scard('minion.workers') - $stats{active_workers};
 
     $stats{uptime} =
-      $self->redis->db->info_structured('server')->{uptime_in_seconds};
+        $self->redis->db->info_structured('server')->{uptime_in_seconds};
 
     return \%stats;
 }
 
 sub unlock {
-    my ( $self, $name ) = @_;
+    my ($self, $name) = @_;
     my $redis = $self->redis->db;
     $redis->multi;
-    $redis->zremrangebyscore( "minion.lock.$name", '-inf', '(' . time );
-    $redis->zremrangebyrank( "minion.lock.$name", 0, 0 );
+    $redis->zremrangebyscore("minion.lock.$name", '-inf', '(' . time);
+    $redis->zremrangebyrank("minion.lock.$name", 0, 0);
     my $res = $redis->exec;
     return !!$res->[1];
 }
 
 sub unregister_worker {
-    my ( $self, $id ) = @_;
+    my ($self, $id) = @_;
     my $redis = $self->redis->db;
-    _delete_worker( $redis, $id );
+    _delete_worker($redis, $id);
 }
 
-sub _flatten {    # no prototype for this one to avoid warnings
-    return map { ref eq 'ARRAY' ? _flatten(@$_) : $_ } @_;
+sub _flatten { # no prototype for this one to avoid warnings
+    return map {ref eq 'ARRAY' ? _flatten(@$_) : $_} @_;
 }
 
 sub _delete_job {
-    my ( $redis, $id, $queue, $state, $task, $worker ) = @_;
+    my ($redis, $id, $queue, $state, $task, $worker) = @_;
     $redis->del(
-        "minion.job.$id",         "minion.job.$id.notes",
+        "minion.job.$id", "minion.job.$id.notes",
         "minion.job.$id.parents", "minion.job.$id.children"
     );
-    $redis->srem( "minion.job_queue.$queue",                 $id );
-    $redis->srem( "minion.job_state.$state",                 $id );
-    $redis->srem( "minion.job_task.$task",                   $id );
-    $redis->srem( 'minion.job_state.inactive,active,failed', $id );
-    $redis->srem( 'minion.jobs',                             $id );
+    $redis->srem("minion.job_queue.$queue", $id);
+    $redis->srem("minion.job_state.$state", $id);
+    $redis->srem("minion.job_task.$task", $id);
+    $redis->srem('minion.job_state.inactive,active,failed', $id);
+    $redis->srem('minion.jobs', $id);
     my $alphaid = sprintf '%012d', $id;
-    $redis->zrem( "minion.inactive_job_queue.$queue", $alphaid );
-    $redis->zrem( "minion.inactive_job_task.$task",   $alphaid );
-    $redis->zrem( 'minion.inactive_job_delayed',      $id );
-    $redis->zrem( 'minion.job_finished',              $id );
-    $redis->srem( "minion.worker.$worker.jobs", $id ) if defined $worker;
+    $redis->zrem("minion.inactive_job_queue.$queue", $alphaid);
+    $redis->zrem("minion.inactive_job_task.$task", $alphaid);
+    $redis->zrem('minion.inactive_job_delayed', $id);
+    $redis->zrem('minion.job_finished', $id);
+    $redis->srem("minion.worker.$worker.jobs", $id) if defined $worker;
 }
 
 sub _delete_worker {
-    my ( $redis, $id ) = @_;
+    my ($redis, $id) = @_;
     $redis->multi;
-    $redis->sunionstore( 'minion.jobs_missing_worker',
-        'minion.jobs_missing_worker', "minion.worker.$id.jobs" );
-    $redis->del( "minion.worker.$id", "minion.worker.$id.inbox",
-        "minion.worker.$id.jobs" );
-    $redis->srem( 'minion.workers', $id );
-    $redis->zrem( 'minion.worker_notified', $id );
+    $redis->sunionstore('minion.jobs_missing_worker',
+        'minion.jobs_missing_worker', "minion.worker.$id.jobs");
+    $redis->del("minion.worker.$id", "minion.worker.$id.inbox",
+        "minion.worker.$id.jobs");
+    $redis->srem('minion.workers', $id);
+    $redis->zrem('minion.worker_notified', $id);
     $redis->exec;
 }
 
-sub _notify_job { shift->redis->pubsub->notify( 'minion.job', '' ) }
+sub _notify_job {shift->redis->pubsub->notify('minion.job', '')}
 
 sub _try {
-    my ( $self, $id, $options ) = @_;
+    my ($self, $id, $options) = @_;
 
-    my $queues = $options->{queues} || ['default'];
-    my $tasks  = [ keys %{ $self->minion->tasks } ];
+    my $queues = $options->{queues} || [ 'default' ];
+    my $tasks = [ keys %{$self->minion->tasks} ];
 
     my $job;
     my $redis_job = $self->redis->db;
-    my $now       = time;
-    if ( defined $options->{id} ) {
+    my $now = time;
+    if (defined $options->{id}) {
 
         # ensure job isn't taken by someone else
         $redis_job->watch("minion.job.$options->{id}");
         $redis_job->multi;
-        $redis_job->hmget( "minion.job.$options->{id}", qw(queue task) );
+        $redis_job->hmget("minion.job.$options->{id}", qw(queue task));
         my $result = $redis_job->exec;
 
-        my ( $queue, $task ) = @{$result};
+        my ($queue, $task) = @{$result};
 
-        if (    defined $task
+        if (defined $task
             and exists $self->minion->tasks->{$task}
             and defined $queue
-            and ( any { $_ eq $queue } @$queues ) )
-        {
-            $job = $self->_try_job( $options->{id}, $now );
+            and (any {$_ eq $queue} @$queues)) {
+            $job = $self->_try_job($options->{id}, $now);
         }
     }
     else {
-        my $queue_hash = sha256_base64( encode 'UTF-8', join( ',', @$queues ) );
-        my $queue_key  = "minion.temp.queues.$queue_hash";
-        my $task_hash  = sha256_base64( encode 'UTF-8', join( ',', @$tasks ) );
-        my $task_key   = "minion.temp.tasks.$task_hash";
+        my $queue_hash = sha256_base64(encode 'UTF-8', join(',', @$queues));
+        my $queue_key = "minion.temp.queues.$queue_hash";
+        my $task_hash = sha256_base64(encode 'UTF-8', join(',', @$tasks));
+        my $task_key = "minion.temp.tasks.$task_hash";
 
         my $redis = $self->redis->db;
         $redis->multi;
         $redis->del($queue_key);
-        $redis->zunionstore( $queue_key, scalar(@$queues),
-            map { "minion.inactive_job_queue.$_" } @$queues )
-          if @$queues;
-        $redis->expire( $queue_key, 60 );
+        $redis->zunionstore($queue_key, scalar(@$queues),
+            map {"minion.inactive_job_queue.$_"} @$queues)
+            if @$queues;
+        $redis->expire($queue_key, 60);
         $redis->del($task_key);
-        $redis->zunionstore( $task_key, scalar(@$tasks),
-            map { "minion.inactive_job_task.$_" } @$tasks )
-          if @$tasks;
-        $redis->expire( $task_key, 60 );
+        $redis->zunionstore($task_key, scalar(@$tasks),
+            map {"minion.inactive_job_task.$_"} @$tasks)
+            if @$tasks;
+        $redis->expire($task_key, 60);
 
         my $priority_hash =
-          sha256_base64( join '$', $queue_hash, $task_hash, $$, $now );
+            sha256_base64(join '$', $queue_hash, $task_hash, $$, $now);
         my $priority_key = "minion.temp.inactive_jobs.$priority_hash";
         $redis->del($priority_key);
         $redis->zinterstore(
@@ -638,7 +655,7 @@ sub _try {
             WEIGHTS => 1,
             0
         );
-        $redis->expire( $priority_key, 60 );
+        $redis->expire($priority_key, 60);
         $redis->exec;
 
         my $i = 0;
@@ -650,16 +667,15 @@ sub _try {
                     LIMIT => $i,
                     1
                 )
-            }
-          )
-        {
+                }
+        ) {
             my $check_id = 0 + $check[0];
 
             # ensure job isn't taken by someone else
             #$redis_job->watch("minion.job.$check_id");
             #$redis_job->multi;
             #print "ersdfsdf";
-            $job = $self->_try_job( $check_id, $now );
+            $job = $self->_try_job($check_id, $now);
             last if $job;
         }
         continue {
@@ -677,61 +693,61 @@ sub _try {
         state   => 'active',
         worker  => $id,
     );
-    $redis_job->srem( 'minion.job_state.inactive', $job->{id} );
-    $redis_job->sadd( 'minion.job_state.active', $job->{id} );
-    $redis_job->srem( "minion.worker.$job->{worker}.jobs", $job->{id} )
-      if defined $job->{worker};
-    $redis_job->sadd( "minion.worker.$id.jobs", $job->{id} );
+    $redis_job->srem('minion.job_state.inactive', $job->{id});
+    $redis_job->sadd('minion.job_state.active', $job->{id});
+    $redis_job->srem("minion.worker.$job->{worker}.jobs", $job->{id})
+        if defined $job->{worker};
+    $redis_job->sadd("minion.worker.$id.jobs", $job->{id});
     my $alphaid = sprintf '%012d', $job->{id};
-    $redis_job->zrem( "minion.inactive_job_queue.$job->{queue}", $alphaid );
-    $redis_job->zrem( "minion.inactive_job_task.$job->{task}",   $alphaid );
-    $redis_job->zrem( 'minion.inactive_job_delayed',             $job->{id} );
+    $redis_job->zrem("minion.inactive_job_queue.$job->{queue}", $alphaid);
+    $redis_job->zrem("minion.inactive_job_task.$job->{task}", $alphaid);
+    $redis_job->zrem('minion.inactive_job_delayed', $job->{id});
     $redis_job->exec;
 
     return {
         id      => $job->{id},
-        args    => from_json( $job->{args} // 'null' ),
+        args    => from_json($job->{args} // 'null'),
         retries => $job->{retries},
         task    => $job->{task},
     };
 }
 
 sub _try_job {
-    my ( $self, $id, $now ) = @_;
-    my ( $state, $delayed ) =
-      @{ $self->redis->db->hmget( "minion.job.$id", qw(state delayed) ) };
+    my ($self, $id, $now) = @_;
+    my ($state, $delayed) =
+        @{$self->redis->db->hmget("minion.job.$id", qw(state delayed))};
     return undef
-      unless defined $state
-      and $state eq 'inactive'
-      and defined $delayed
-      and $delayed <= $now;
+        unless defined $state
+            and $state eq 'inactive'
+            and defined $delayed
+            and $delayed <= $now;
     my $pending = @{
-        $self->redis->db->sinter( "minion.job.$id.parents",
-            'minion.job_state.inactive,active,failed' )
-    };
+        $self->redis->db->sinter("minion.job.$id.parents",
+            'minion.job_state.inactive,active,failed')
+        };
     return undef if $pending;
     my %job;
     @job{qw(id args queue retries task worker)} = @{
-        $self->redis->db->hmget( "minion.job.$id",
-            qw(id args queue retries task worker) )
-    };
+        $self->redis->db->hmget("minion.job.$id",
+            qw(id args queue retries task worker))
+        };
     return \%job;
 }
 
 sub _update {
-    my ( $self, $fail, $id, $retries, $result ) = @_;
+    my ($self, $fail, $id, $retries, $result) = @_;
 
     my $state = $fail ? 'failed' : 'finished';
     my $redis = $self->redis->db;
 
-    my ( $attempts, $curr_retries, $curr_state ) =
-      @{ $redis->hmget( "minion.job.$id", qw(attempts retries state) ) };
+    my ($attempts, $curr_retries, $curr_state) =
+        @{$redis->hmget("minion.job.$id", qw(attempts retries state))};
 
     return undef
-      unless defined $curr_retries
-      and $curr_retries == $retries
-      and defined $curr_state
-      and $curr_state eq 'active';
+        unless defined $curr_retries
+            and $curr_retries == $retries
+            and defined $curr_state
+            and $curr_state eq 'active';
 
     $redis->watch("minion.job.$id");
     $redis->multi;
@@ -742,17 +758,17 @@ sub _update {
         result   => to_json($result),
         state    => $state,
     );
-    $redis->srem( 'minion.job_state.active',                 $id );
-    $redis->srem( 'minion.job_state.inactive,active,failed', $id )
-      unless $fail;
-    $redis->sadd( "minion.job_state.$state", $id );
-    $redis->zadd( 'minion.job_finished', $now => $id ) unless $fail;
+    $redis->srem('minion.job_state.active', $id);
+    $redis->srem('minion.job_state.inactive,active,failed', $id)
+        unless $fail;
+    $redis->sadd("minion.job_state.$state", $id);
+    $redis->zadd('minion.job_finished', $now => $id) unless $fail;
     $redis->exec;
 
     return 1 if !$fail || $attempts == 1;
-    return 1 if $retries >= ( $attempts - 1 );
+    return 1 if $retries >= ($attempts - 1);
     my $delay = $self->minion->backoff->($retries);
-    return $self->retry_job( $id, $retries, { delay => $delay } );
+    return $self->retry_job($id, $retries, { delay => $delay });
 }
 
 1;
