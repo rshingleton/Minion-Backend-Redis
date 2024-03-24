@@ -802,8 +802,6 @@ is required to use this backend.
 
 This is a slightly hackish modification of the original code by L<Dan Book|https://github.com/Grinnz/Minion-Backend-Redis> to use L<Mojo::Redis> instead of L<Mojo::Redis2>.
 
-Due to the original code being written against an older Minion version, "history" is currently unimplemented.
-
 =head1 PERFORMANCE
 
 You can run examples/minion_bench.pl to get some performance metrics.  
